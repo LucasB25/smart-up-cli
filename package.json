@@ -1,0 +1,36 @@
+{
+  "name": "smart-up-cli",  
+  "version": "1.0.0",
+  "description": "A smart and interactive NPM updater",
+  "main": "dist/index.js",
+  "bin": {
+    "smart-up": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build", 
+    "start": "node dist/index.js"
+  },
+  "keywords": ["npm", "updater", "interactive", "cli"],
+  "author": "LucasB25",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "commander": "^14.0.2",
+    "inquirer": "^13.0.2",
+    "npm-check-updates": "^19.1.2",
+    "ora": "^9.0.0",
+    "semver": "^7.7.3"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.9",
+    "@types/node": "^24.10.1",
+    "@types/semver": "^7.7.1",
+    "@types/yargs": "^17.0.35",
+    "typescript": "^5.9.3"
+  }
+}
