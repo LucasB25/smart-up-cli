@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
@@ -11,17 +12,35 @@ import figlet from 'figlet';
 import gradient from 'gradient-string';
 import boxen from 'boxen';
 
+interface UpdateInfo {
+  name: string;
+  current: string;
+  upgrade: string;
+  type: 'major' | 'premajor' | 'minor' | 'patch' | 'other';
+  url: string;
+}
+
+interface CliOptions {
+  dryRun?: boolean;
+  backup?: boolean;
+}
+
 const program = new Command();
 
 program
-  .version('1.2.0')
+  .version('1.3.1')
   .description('A smart and interactive NPM updater')
-  .action(async () => {
-    await runSmartUpdate();
+  .option('-d, --dry-run', 'Simulate the process without writing changes')
+  .option('--no-backup', 'Disable automatic package.json backup')
+  .action(async (options: CliOptions) => {
+    await runSmartUpdate(options);
   });
 
 program.parse(process.argv);
 
+/**
+ * Detects the package manager used (npm, yarn, pnpm, bun)
+ */
 function detectPackageManager() {
   if (fs.existsSync('yarn.lock')) return 'yarn';
   if (fs.existsSync('pnpm-lock.yaml')) return 'pnpm';
@@ -29,6 +48,9 @@ function detectPackageManager() {
   return 'npm';
 }
 
+/**
+ * Attempts to find the repository URL for a given package
+ */
 function getPackageUrl(dep: string): string {
   try {
     const pkgPath = path.join('node_modules', dep, 'package.json');
@@ -41,11 +63,14 @@ function getPackageUrl(dep: string): string {
       }
     }
   } catch (e) {
-    // Ignore
+    // Silent failure, return default npm link
   }
   return `https://www.npmjs.com/package/${dep}`;
 }
 
+/**
+ * Displays the ASCII banner at startup
+ */
 function showBanner() {
   console.clear();
   const title = figlet.textSync('Smart-Up', { font: 'Standard' });
@@ -53,7 +78,37 @@ function showBanner() {
   console.log(chalk.cyan('   The intelligent interactive updater\n'));
 }
 
-async function runSmartUpdate() {
+/**
+ * Creates a backup copy of package.json
+ */
+function backupPackageJson(): boolean {
+  try {
+    fs.copyFileSync('package.json', 'package.json.bak');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Restores package.json from the backup
+ */
+function restoreBackup() {
+  try {
+    if (fs.existsSync('package.json.bak')) {
+      fs.copyFileSync('package.json.bak', 'package.json');
+      fs.unlinkSync('package.json.bak');
+      console.log(chalk.yellow('\n   ↺ package.json restored from backup.'));
+    }
+  } catch (e) {
+    console.error(chalk.red('\n   ❌ Failed to restore backup.'));
+  }
+}
+
+/**
+ * Main Logic
+ */
+async function runSmartUpdate(options: CliOptions) {
   showBanner();
 
   if (!fs.existsSync('package.json')) {
@@ -73,7 +128,7 @@ async function runSmartUpdate() {
   const spinner = ora('Analyzing dependencies...').start();
 
   try {
-    const upgraded = await ncu.run({
+    const upgradedRaw = await ncu.run({
       packageFile: 'package.json',
       upgrade: false,
       jsonUpgraded: true,
@@ -82,78 +137,86 @@ async function runSmartUpdate() {
 
     spinner.stop();
 
-    const dependencies = Object.keys(upgraded);
+    const depNames = Object.keys(upgradedRaw);
 
-    if (dependencies.length === 0) {
+    if (depNames.length === 0) {
       console.log(boxen(chalk.green('✅  Everything is up-to-date!\n   Good job maintaining your deps.'), { padding: 1, borderStyle: 'round', borderColor: 'green' }));
       return;
     }
 
-    const choices = dependencies.map((dep) => {
-      const pkg = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
-      const currentVersionRaw = pkg.dependencies?.[dep] || pkg.devDependencies?.[dep] || '0.0.0';
-      const newVersionRaw = upgraded[dep];
+    const pkgContent = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
 
+    const updates: UpdateInfo[] = depNames.map(dep => {
+      const currentVersionRaw = pkgContent.dependencies?.[dep] || pkgContent.devDependencies?.[dep] || '0.0.0';
+      const newVersionRaw = upgradedRaw[dep];
       const currentSemver = semver.coerce(currentVersionRaw);
       const newSemver = semver.coerce(newVersionRaw);
-      const url = getPackageUrl(dep);
 
-      if (!currentSemver || !newSemver) {
-        return {
-          name: `${chalk.bold(dep)}\n      ${chalk.dim('Unknown version type')}`,
-          value: { name: dep, version: newVersionRaw },
-          checked: false,
-          short: dep
-        };
+      let type: UpdateInfo['type'] = 'other';
+      if (currentSemver && newSemver) {
+        // @ts-ignore - semver types mismatch sometimes
+        type = semver.diff(currentSemver.version, newSemver.version) || 'other';
       }
 
-      const diffType = semver.diff(currentSemver.version, newSemver.version);
+      return {
+        name: dep,
+        current: currentVersionRaw,
+        upgrade: newVersionRaw,
+        type,
+        url: getPackageUrl(dep)
+      };
+    });
 
+    const riskOrder = ['patch', 'minor', 'premajor', 'major', 'other'];
+    updates.sort((a, b) => riskOrder.indexOf(a.type) - riskOrder.indexOf(b.type));
+
+    const choices = updates.map(update => {
       let badge = '';
       let versionDiff = '';
       let checked = true;
 
-      switch (diffType) {
+      switch (update.type) {
         case 'major':
           badge = chalk.bgRed.bold.white('  MAJOR  ');
-          versionDiff = chalk.red(`${currentSemver.version} ➔ ${newSemver.version}`);
+          versionDiff = chalk.red(`${update.current} ➔ ${update.upgrade}`);
           checked = false;
           break;
         case 'premajor':
           badge = chalk.bgRed.bold.white(' PRE-MAJ ');
-          versionDiff = chalk.red(`${currentSemver.version} ➔ ${newSemver.version}`);
+          versionDiff = chalk.red(`${update.current} ➔ ${update.upgrade}`);
           checked = false;
           break;
         case 'minor':
           badge = chalk.bgYellow.black('  MINOR  ');
-          versionDiff = chalk.yellow(`${currentSemver.version} ➔ ${newSemver.version}`);
+          versionDiff = chalk.yellow(`${update.current} ➔ ${update.upgrade}`);
           checked = true;
           break;
         case 'patch':
           badge = chalk.bgGreen.black('  PATCH  ');
-          versionDiff = chalk.green(`${currentSemver.version} ➔ ${newSemver.version}`);
+          versionDiff = chalk.green(`${update.current} ➔ ${update.upgrade}`);
           checked = true;
           break;
         default:
-          badge = chalk.bgGray.white(' OTHER ');
-          versionDiff = chalk.gray(`${currentSemver.version} ➔ ${newSemver.version}`);
+          badge = chalk.bgGray.white('  OTHER  ');
+          versionDiff = chalk.gray(`${update.current} ➔ ${update.upgrade}`);
+          checked = false;
       }
 
       return {
-        name: `${chalk.bold(dep.padEnd(20))} ${badge}  ${versionDiff}\n      ${chalk.dim('└─')} ${chalk.cyan.underline(url)}`,
-        value: { name: dep, version: newVersionRaw },
+        name: `${chalk.bold(update.name.padEnd(25))} ${badge}  ${versionDiff}\n      ${chalk.dim('└─')} ${chalk.cyan.underline(update.url)}`,
+        value: { name: update.name, version: update.upgrade },
         checked: checked,
-        short: dep
+        short: update.name
       };
     });
 
-    console.log(chalk.gray('Use Space to select/deselect, Enter to confirm.\n'));
+    console.log(chalk.gray('Use Space to select, Enter to confirm.\n'));
 
     const response = await inquirer.prompt([
       {
         type: 'checkbox',
         name: 'selected',
-        message: 'Ready to update? Select packages:',
+        message: 'Packages to update:',
         choices: choices,
         pageSize: 15,
         loop: false
@@ -165,9 +228,25 @@ async function runSmartUpdate() {
       return;
     }
 
+    if (options.dryRun) {
+      console.log('\n' + boxen(chalk.blue('ℹ️  SIMULATION MODE (DRY RUN)'), { borderStyle: 'round', borderColor: 'blue' }));
+      console.log(chalk.dim(`The following packages would have been updated:`));
+      response.selected.forEach((s: any) => console.log(` - ${s.name} @ ${s.version}`));
+      return;
+    }
+
+    if (options.backup !== false) {
+      const backupSpinner = ora('Creating backup (package.json.bak)...').start();
+      if (backupPackageJson()) {
+        backupSpinner.succeed('Backup created.');
+      } else {
+        backupSpinner.warn('Could not create backup. Continuing...');
+      }
+    }
+
     console.log('\n' + boxen(chalk.bold(`Updating ${response.selected.length} packages...`), { padding: { left: 2, right: 2 }, borderStyle: 'classic', borderColor: 'cyan' }) + '\n');
 
-    const installSpinner = ora('Writing package.json...').start();
+    const writeSpinner = ora('Writing package.json...').start();
 
     const filter = response.selected.map((s: any) => s.name);
 
@@ -178,7 +257,9 @@ async function runSmartUpdate() {
       silent: true
     });
 
-    installSpinner.text = `Installing with ${manager}...`;
+    writeSpinner.succeed('package.json file updated.');
+
+    console.log(chalk.blue(`\nStarting installation with ${manager}...`));
 
     try {
       let installCmd = 'npm install';
@@ -188,8 +269,11 @@ async function runSmartUpdate() {
 
       execSync(installCmd, { stdio: 'inherit' });
 
-      installSpinner.stop();
-      console.log('\n' + boxen(gradient.pastel('  🚀 Updates completed successfully!  \n  Your project is now fresh and clean.  '), {
+      if (options.backup !== false && fs.existsSync('package.json.bak')) {
+        fs.unlinkSync('package.json.bak');
+      }
+
+      console.log('\n' + boxen(gradient.pastel('  🚀 Updates completed successfully!  \n  Your project is fresh and clean.  '), {
         padding: 1,
         margin: 1,
         borderStyle: 'double',
@@ -197,7 +281,21 @@ async function runSmartUpdate() {
       }));
 
     } catch (e) {
-      installSpinner.fail(chalk.red(`❌ Error running ${manager}. Check console output.`));
+      console.log('\n');
+      console.error(chalk.bgRed.white(` ❌ Error executing ${manager}. `));
+
+      const { restore } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'restore',
+        message: 'Installation failed. Do you want to restore the old package.json?',
+        default: true
+      }]);
+
+      if (restore) {
+        restoreBackup();
+      } else {
+        console.log(chalk.yellow('   Modified package.json kept.'));
+      }
     }
 
   } catch (error: any) {
