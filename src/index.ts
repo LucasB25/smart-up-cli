@@ -7,11 +7,14 @@ import semver from 'semver';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import figlet from 'figlet';
+import gradient from 'gradient-string';
+import boxen from 'boxen';
 
 const program = new Command();
 
 program
-  .version('1.1.2')
+  .version('1.2.0')
   .description('A smart and interactive NPM updater')
   .action(async () => {
     await runSmartUpdate();
@@ -38,21 +41,34 @@ function getPackageUrl(dep: string): string {
       }
     }
   } catch (e) {
-    // Ignore errors and fallback to npmjs URL
+    // Ignore
   }
   return `https://www.npmjs.com/package/${dep}`;
 }
 
+function showBanner() {
+  console.clear();
+  const title = figlet.textSync('Smart-Up', { font: 'Standard' });
+  console.log(gradient.pastel.multiline(title));
+  console.log(chalk.cyan('   The intelligent interactive updater\n'));
+}
+
 async function runSmartUpdate() {
-  console.log(chalk.bold.blue('\n🚀 Welcome to Smart-Up!\n'));
+  showBanner();
 
   if (!fs.existsSync('package.json')) {
-    console.error(chalk.red('❌ No package.json file found in this directory.'));
+    console.log(boxen(chalk.red('❌ No package.json file found here.'), { padding: 1, borderColor: 'red', borderStyle: 'double' }));
     return;
   }
 
   const manager = detectPackageManager();
-  console.log(chalk.dim(`ℹ️  Detected package manager: ${chalk.bold(manager)}`));
+
+  console.log(boxen(`${chalk.bold('Package Manager:')} ${chalk.magenta(manager)}`, {
+    padding: { top: 0, bottom: 0, left: 1, right: 1 },
+    borderStyle: 'round',
+    borderColor: 'gray',
+    dimBorder: true
+  }));
 
   const spinner = ora('Analyzing dependencies...').start();
 
@@ -69,7 +85,7 @@ async function runSmartUpdate() {
     const dependencies = Object.keys(upgraded);
 
     if (dependencies.length === 0) {
-      console.log(chalk.green('✅ Everything is up-to-date! Good job.'));
+      console.log(boxen(chalk.green('✅  Everything is up-to-date!\n   Good job maintaining your deps.'), { padding: 1, borderStyle: 'round', borderColor: 'green' }));
       return;
     }
 
@@ -84,7 +100,7 @@ async function runSmartUpdate() {
 
       if (!currentSemver || !newSemver) {
         return {
-          name: `${chalk.bold(dep)} ${chalk.dim(`(${url})`)}\n    [${chalk.gray(currentVersionRaw)} -> ${chalk.magenta(newVersionRaw)}]`,
+          name: `${chalk.bold(dep)}\n      ${chalk.dim('Unknown version type')}`,
           value: { name: dep, version: newVersionRaw },
           checked: false,
           short: dep
@@ -93,45 +109,51 @@ async function runSmartUpdate() {
 
       const diffType = semver.diff(currentSemver.version, newSemver.version);
 
-      let coloredDiff = '';
+      let badge = '';
+      let versionDiff = '';
       let checked = true;
 
       switch (diffType) {
         case 'major':
-          coloredDiff = chalk.red(`Major: ${currentSemver.version} -> ${newSemver.version}`);
+          badge = chalk.bgRed.bold.white('  MAJOR  ');
+          versionDiff = chalk.red(`${currentSemver.version} ➔ ${newSemver.version}`);
           checked = false;
           break;
         case 'premajor':
-          coloredDiff = chalk.red(`Pre-Major: ${currentSemver.version} -> ${newSemver.version}`);
+          badge = chalk.bgRed.bold.white(' PRE-MAJ ');
+          versionDiff = chalk.red(`${currentSemver.version} ➔ ${newSemver.version}`);
           checked = false;
           break;
         case 'minor':
-          coloredDiff = chalk.yellow(`Minor: ${currentSemver.version} -> ${newSemver.version}`);
+          badge = chalk.bgYellow.black('  MINOR  ');
+          versionDiff = chalk.yellow(`${currentSemver.version} ➔ ${newSemver.version}`);
           checked = true;
           break;
         case 'patch':
-          coloredDiff = chalk.green(`Patch: ${currentSemver.version} -> ${newSemver.version}`);
+          badge = chalk.bgGreen.black('  PATCH  ');
+          versionDiff = chalk.green(`${currentSemver.version} ➔ ${newSemver.version}`);
           checked = true;
           break;
         default:
-          coloredDiff = chalk.gray(`${currentSemver.version} -> ${newSemver.version}`);
+          badge = chalk.bgGray.white(' OTHER ');
+          versionDiff = chalk.gray(`${currentSemver.version} ➔ ${newSemver.version}`);
       }
 
       return {
-        name: `${chalk.bold(dep)} ${chalk.cyan.underline(url)}\n    [${coloredDiff}]`,
+        name: `${chalk.bold(dep.padEnd(20))} ${badge}  ${versionDiff}\n      ${chalk.dim('└─')} ${chalk.cyan.underline(url)}`,
         value: { name: dep, version: newVersionRaw },
         checked: checked,
         short: dep
       };
     });
 
-    console.log(chalk.dim('Tip: Cmd+Click (Mac) or Ctrl+Click (Win) on links to see changelogs.\n'));
+    console.log(chalk.gray('Use Space to select/deselect, Enter to confirm.\n'));
 
     const response = await inquirer.prompt([
       {
         type: 'checkbox',
         name: 'selected',
-        message: 'Select dependencies to update:',
+        message: 'Ready to update? Select packages:',
         choices: choices,
         pageSize: 15,
         loop: false
@@ -139,11 +161,13 @@ async function runSmartUpdate() {
     ]);
 
     if (response.selected.length === 0) {
-      console.log(chalk.yellow('No updates selected.'));
+      console.log(chalk.yellow('\nNo updates selected. Exiting.'));
       return;
     }
 
-    const installSpinner = ora('Updating package.json...').start();
+    console.log('\n' + boxen(chalk.bold(`Updating ${response.selected.length} packages...`), { padding: { left: 2, right: 2 }, borderStyle: 'classic', borderColor: 'cyan' }) + '\n');
+
+    const installSpinner = ora('Writing package.json...').start();
 
     const filter = response.selected.map((s: any) => s.name);
 
@@ -154,7 +178,7 @@ async function runSmartUpdate() {
       silent: true
     });
 
-    installSpinner.text = `Installing dependencies with ${manager}...`;
+    installSpinner.text = `Installing with ${manager}...`;
 
     try {
       let installCmd = 'npm install';
@@ -164,13 +188,26 @@ async function runSmartUpdate() {
 
       execSync(installCmd, { stdio: 'inherit' });
 
-      installSpinner.succeed(chalk.green(`✅ Updates completed successfully using ${manager}!`));
+      installSpinner.stop();
+      console.log('\n' + boxen(gradient.pastel('  🚀 Updates completed successfully!  \n  Your project is now fresh and clean.  '), {
+        padding: 1,
+        margin: 1,
+        borderStyle: 'double',
+        borderColor: 'green'
+      }));
+
     } catch (e) {
       installSpinner.fail(chalk.red(`❌ Error running ${manager}. Check console output.`));
     }
 
-  } catch (error) {
-    spinner.fail('Critical error.');
+  } catch (error: any) {
+    if (error.message && (error.message.includes('User force closed') || error.name === 'ExitPromptError')) {
+      console.log('\n' + boxen(chalk.yellow('👋 Bye! See you later.'), { padding: 1, borderStyle: 'round', borderColor: 'yellow' }));
+      return;
+    }
+
+    spinner.stop();
+    console.error('\n' + boxen(chalk.red('❌ Critical Error'), { borderStyle: 'double', borderColor: 'red' }));
     console.error(error);
   }
 }
