@@ -1,6 +1,6 @@
 {
   "name": "smart-up-cli",  
-  "version": "1.1.0",
+  "version": "1.1.2",
   "description": "A smart and interactive NPM updater",
   "main": "dist/index.js",
   "bin": {
@@ -11,8 +11,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build", 
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "dev": "npx ts-node src/index.ts"
   },
   "keywords": ["npm", "updater", "interactive", "cli"],
   "author": "LucasB25",

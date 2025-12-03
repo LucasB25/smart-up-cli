@@ -11,7 +11,7 @@ import path from 'path';
 const program = new Command();
 
 program
-  .version('1.1.0')
+  .version('1.1.2')
   .description('A smart and interactive NPM updater')
   .action(async () => {
     await runSmartUpdate();
